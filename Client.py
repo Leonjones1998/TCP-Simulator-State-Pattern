@@ -5,9 +5,9 @@ import json
 import time
 import sys
 
-SIZE = 4096
-SERVER = "172.19.233.130"
-PORT = 54366
+SIZE = ****
+SERVER = "****.**.***.***"
+PORT = *****
 SEQ_NO = random.randint(0, 9999)
 
 
