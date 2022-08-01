@@ -5,11 +5,10 @@ import sys
 import random
 import json
 
-SIZE = 1024
-SERVER = "192.168.1.182"
-PORT = 15699
+SIZE = ****
+SERVER = "***.***.*.***"
+PORT = *****
 SEQ_NO = random.randint(0, 9999)
-
 
 class Closed(State, Transition):
     def __init__(self, Context):
