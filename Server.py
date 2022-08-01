@@ -1,10 +1,13 @@
 import socket
 from State import *
+import time
+import sys
 import random
+import json
 
-SIZE = 4096
-SERVER = "172.19.233.130"
-PORT = 54366
+SIZE = 1024
+SERVER = "192.168.1.182"
+PORT = 15699
 SEQ_NO = random.randint(0, 9999)
 
 
@@ -14,15 +17,9 @@ class Closed(State, Transition):
 
     def passive_open(self):
         print("Passively Opening The Server")
-        self.CurrentContext.Socket()
-        print("Connection Made")
         print("Setting Server State To Listen")
-        print("Waiting for a connection")
         self.CurrentContext.setState("LISTEN")
         return True
-    
-    def trigger(self):
-        self.CurrentContext.passive_open()
 
     def rst(self):
         pass
@@ -33,6 +30,7 @@ class Listen(State, Transition):
         State.__init__(self, Context)
 
     def syn(self):
+        self.CurrentContext.Socket()
         self.CurrentContext.StoreData()
         self.CurrentContext.CheckPacket()
         print("Syn Number Received")
@@ -40,6 +38,7 @@ class Listen(State, Transition):
         print("Syn & Ack Sent Back To Client")
         print("Setting Server State To Syn Received")
         self.CurrentContext.setState("SYNRECVD")
+
         return True
 
     def trigger(self):
@@ -54,8 +53,8 @@ class SynRecvd(State, Transition):
         State.__init__(self, Context)
 
     def ack(self):
-        print("here")
-        #self.CurrentContext.CheckPacket()
+        self.CurrentContext.StoreData()
+        self.CurrentContext.CheckPacket()
         print("Ack Number Received")
         print("Setting Server State To Established")
         self.CurrentContext.setState("ESTABLISHED")
@@ -71,10 +70,6 @@ class SynRecvd(State, Transition):
 class Established(State, Transition):
     def __init__(self, Context):
         State.__init__(self, Context)
-
-    def close(self):
-        self.CurrentContext.ReceiveMessage()
-        self.CurrentContext.CloseConnection()
 
     def fin(self):
         self.CurrentContext.StoreData()
@@ -98,12 +93,16 @@ class CloseWait(State, Transition):
         State.__init__(self, Context)
 
     def close(self):
+        time.sleep(3)
         print("Close Command Received")
         self.CurrentContext.SendFin()
         print("Fin Sent To Client")
         print("Setting Server State To Last Ack")
         self.CurrentContext.setState("LASTACK")
         return True
+
+    def trigger(self):
+        self.close()
 
     def rst(self):
         pass
@@ -114,10 +113,16 @@ class LastAck(State, Transition):
         State.__init__(self, Context)
 
     def ack(self):
-        print("Ack Sent Back To Client")
-        self.CurrentContext.setState("CLOSEWAIT")
-        print("Setting Server State To Close Wait")
+        self.CurrentContext.StoreData()
+        self.CurrentContext.CheckPacket()
+        print("Final Ack Received from Client")
+        print("Closing The Connection and Restarting The Program")
+        self.CurrentContext.CloseConnection()
+        self.CurrentContext.setState("CLOSED")
         return True
+
+    def trigger(self):
+        self.ack()
 
     def rst(self):
         pass
@@ -172,6 +177,7 @@ class Server(StateContext, Transition):
         try:
             self.S_Sock.bind((self.host, self.port))
             self.S_Sock.listen(1)
+            print("Waiting for a Client to Connect")
             self.connection, connAddr = self.S_Sock.accept()
             print(f"Connection from {connAddr}")
         except Exception as err:
@@ -183,9 +189,12 @@ class Server(StateContext, Transition):
     def StoreData(self):
         self.dataString = self.connection.recv(SIZE)
         self.dataString = self.dataString.decode()
+        print(self.dataString)
         self.dataArray = self.dataString.split(',')
+        print(self.dataArray)
 
         self.synD = self.dataArray[0][3:]
+        print(self.synD)
         self.ackD = self.dataArray[1][3:]
         self.clientSeq = self.dataArray[2][3:]
         self.finD = self.dataArray[3][3:]
@@ -218,9 +227,9 @@ class Server(StateContext, Transition):
 
     def SendAck(self):
         print("[Sending] Ack")
-        ackString = f"SYN0,ACK{self.conSeq + 1},SEQ{self.seq},FIN0"
+        ack = f"SYN0,ACK{self.conSeq + 1},SEQ{self.seq},FIN0"
         try:
-            self.connection.send(ackString.encode())
+            self.connection.send(ack.encode())
         except Exception as err:
             print("[System Error] Packet Couldn't Be Sent.")
             print(err)
@@ -240,20 +249,6 @@ class Server(StateContext, Transition):
             exit()
         self.seq += 1
 
-    def ReceiveMessage(self):
-        receive = "Message Received"
-        quit_receive = "Quit Received"
-        while True:
-            message = self.connection.recv(SIZE)
-            message = message.decode()
-            if message == "!Quit":
-                print("Quit from client received")
-                self.connection.send(quit_receive.encode())
-                break
-            print(f"Message From Client: {message}")
-            self.seq += len(message)
-            self.connection.send(receive.encode())
-
     def CloseConnection(self):
         print("[Connection] Closing Connection.")
         self.S_Sock.close()
@@ -261,7 +256,8 @@ class Server(StateContext, Transition):
 
 def Main():
     MyServer = Server()
+    MyServer.passive_open()
 
 
 if __name__ == '__main__':
-    Main()    
+        Main()

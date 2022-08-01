@@ -1,6 +1,9 @@
 import socket
 from State import *
 import random
+import json
+import time
+import sys
 
 SIZE = 4096
 SERVER = "172.19.233.130"
@@ -8,48 +11,18 @@ PORT = 54366
 SEQ_NO = random.randint(0, 9999)
 
 
-def encrypt_decrypt(inputtext, secretkey):
-    endkeyposition = len(secretkey) - 1
-    currentkeyposition = 0
-    outputtext = ""
-    for inputtextbyte in inputtext:
-        if currentkeyposition > endkeyposition: currentkeyposition = 0
-        outputbyte = ord(inputtextbyte) ^ ord(secretkey[currentkeyposition])
-        outputtext += chr(outputbyte)
-        currentkeyposition += 1
-    return outputtext
-
-
-def ss_encrypt_decrypt(inputtext, secretkey, encrypt):
-    endkeyposition = len(secretkey) - 1
-    currentkeyposition = 0
-    outputtext = ""
-    for inputtextbyte in inputtext:
-        if currentkeyposition > endkeyposition: currentkeyposition %= endkeyposition
-        outputbyte = ord(inputtextbyte) ^ ord(secretkey[currentkeyposition])
-        outputtext += chr(outputbyte)
-        if encrypt:
-            currentkeyposition += outputbyte
-        else:
-            currentkeyposition += ord(inputtextbyte)
-    return outputtext
-
-
 class Closed(State, Transition):
     def __init__(self, Context):
         State.__init__(self, Context)
 
     def active_open(self):
-        print("Actively Initiating The Connection")
+        print("[Connecting] Actively Initiating The Connection")
         self.CurrentContext.Socket()
-        print("Connection Made")
+        print("[Connected] Connection Made")
         self.CurrentContext.SendSyn()
-        print("Setting Server State To Syn Sent")
+        print("[Setting State] Setting Server State To Syn Sent")
         self.CurrentContext.setState("SYNSENT")
         return True
-    
-    def trigger(self):
-        self.CurrentContext.active_open()
 
 
 class SynSent(State, Transition):
@@ -59,10 +32,8 @@ class SynSent(State, Transition):
     def syn_ack(self):
         self.CurrentContext.StoreData()
         self.CurrentContext.CheckPacket()
-        print("Syn and Ack Number Received")
         self.CurrentContext.SendAck()
-        print("Ack Sent Back To Server")
-        print("Setting Server State To Established")
+        print("[Setting State] Setting Server State To Established")
         self.CurrentContext.setState("ESTABLISHED")
         return True
 
@@ -80,11 +51,69 @@ class Established(State, Transition):
     def __init__(self, Context):
         State.__init__(self, Context)
 
-    def messages(self):
-        self.CurrentContext.ReceiveMessage()
+    def close(self):
+        self.CurrentContext.SendMessage()
+        self.CurrentContext.SendFin()
+        print("Setting State To FinWait1")
+        self.CurrentContext.setState("FINWAIT1")
+        return True
+
+    def trigger(self):
+        self.close()
 
     def rst(self):
         pass
+
+
+class FinWait1(State, Transition):
+    def __init__(self, Context):
+        State.__init__(self, Context)
+
+    def fin2(self):
+        print("here")
+        self.CurrentContext.StoreData()
+        print("here")
+        self.CurrentContext.CheckPacket()
+        print("Ack Number Received")
+        print("Setting State To FinWait2")
+        self.CurrentContext.setState("FINWAIT2")
+        return True
+
+    def trigger(self):
+        self.fin2()
+
+
+class FinWait2(State, Transition):
+    def __init__(self, Context):
+        State.__init__(self, Context)
+
+    def ack(self):
+        self.CurrentContext.StoreData()
+        self.CurrentContext.CheckPacket()
+        print("Fin Number Received")
+        self.CurrentContext.SendAck()
+        print("Ack Sent Back To Server")
+        print("Setting State To TimedWait")
+        self.CurrentContext.setState("TIMEDWAIT")
+        return True
+
+    def trigger(self):
+        self.ack()
+
+
+class TimedWait(State, Transition):
+    def __init__(self, Context):
+        State.__init__(self, Context)
+
+    def timeout(self):
+        self.CurrentContext.CloseConnection()
+        print("Closing The Connection and Restarting The Program")
+        self.CurrentContext.setState("CLOSED")
+
+    def trigger(self):
+        self.timeout()
+
+
 
 
 class Client(StateContext, Transition):
@@ -102,9 +131,9 @@ class Client(StateContext, Transition):
         self.availableStates["CLOSED"] = Closed(self)
         self.availableStates["SYNSENT"] = SynSent(self)
         self.availableStates["ESTABLISHED"] = Established(self)
-        # self.availableStates["FINWAIT1"] = FinWait1(self)
-        # self.availableStates["FINWAIT2"] = FinWait2(self)
-        # self.availableStates["TIMEDWAIT"] = TimedWait(self)
+        self.availableStates["FINWAIT1"] = FinWait1(self)
+        self.availableStates["FINWAIT2"] = FinWait2(self)
+        self.availableStates["TIMEDWAIT"] = TimedWait(self)
         self.setState("CLOSED")
 
     def active_open(self):
@@ -135,6 +164,7 @@ class Client(StateContext, Transition):
         self.C_Sock = socket.socket()
         try:
             self.C_Sock.connect((self.host, self.port))
+            print("[Connected] Connection Made")
         except Exception as err:
             print("[System Error] Socket Couldn't Be Created.")
             print(err)
@@ -160,7 +190,7 @@ class Client(StateContext, Transition):
             print(f"[Received ACK] SYN: {self.synD} ACK: {self.ackD} SEQ: {self.clientSeq} FIN: {self.finD}")
         elif int(self.synD) == 1 and int(self.ackD) == self.seq:
             self.conSeq = int(self.clientSeq)
-            print(f"[Received Syn + Ack] SYN: {self.synD} ACK: {self.ackD} SEQ: {self.clientSeq} FIN: {self.finD}")
+            print(f"[Received SYN + ACK] SYN: {self.synD} ACK: {self.ackD} SEQ: {self.clientSeq} FIN: {self.finD}")
         elif int(self.finD) == 1:
             self.conSeq = int(self.clientSeq)
             print(f"[Received FIN] SYN: {self.synD} ACK: {self.ackD} SEQ: {self.clientSeq} FIN: {self.finD}")
@@ -173,18 +203,6 @@ class Client(StateContext, Transition):
         synString = f"SYN1,ACK0,SEQ{self.seq},FIN0"
         try:
             self.C_Sock.send(synString.encode())
-        except Exception as err:
-            print("[System Error] Packet Couldn't Be Sent.")
-            print(err)
-            print("[Exiting] Now Exiting The Program.")
-            exit()
-        self.seq += 1
-
-    def SendSynAck(self):
-        print(f"[Sending] SynAck")
-        synAckString = f"SYN1,ACK{self.conSeq + 1},SEQ{self.seq},FIN0"
-        try:
-            self.C_Sock.send(synAckString.encode())
         except Exception as err:
             print("[System Error] Packet Couldn't Be Sent.")
             print(err)
@@ -217,17 +235,15 @@ class Client(StateContext, Transition):
         self.seq += 1
 
     def SendMessage(self):
-        message = input("Message: ")
-        while message != "!Quit":
-            cyphertext = ss_encrypt_decrypt(message, "UniversityOfSouthWales", True)
-            print("Sending: " + cyphertext)
-            self.connection.send(cyphertext.encode())
-            cyphertext = self.connection.recv(SIZE)
-            print("Decrypting Message")
-            message = ss_encrypt_decrypt(cyphertext.decode(), "UniversityOfSouthWales", False)
-            print("Received: " + message)
-            message = input("Message: ")
-        self.connection.close()
+        dump = input("Message: ")
+        json.dumps(dump)
+        while dump != "test":
+            time.sleep(2)
+            dump = input("Message: ")
+            json.dumps(dump)
+            self.C_Sock.sendall(bytes(dump, encoding="utf-8"))
+        rec_message = self.C_Sock.recv(SIZE)
+        print(rec_message)
 
     def CloseConnection(self):
         print("[Connection] Closing Connection.")
@@ -236,6 +252,15 @@ class Client(StateContext, Transition):
 
 def Main():
     MyClient = Client()
+    MyClient.active_open()
+
 
 if __name__ == '__main__':
-    Main()
+    while True:
+        print("Would you like to Begin?")
+        y = input("Type Yes To Begin: ")
+        if y == "Yes":
+            Main()
+        else:
+            break
+
